@@ -1,0 +1,8 @@
+{
+  "name": "Viridian Recon",
+  "description": "High-performance Meta Ads Library scraper featuring an emerald glassmorphism UI, real-time WebSocket telemetry and a relentless Playwright stealth backend.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
