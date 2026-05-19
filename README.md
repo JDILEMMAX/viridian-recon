@@ -15,6 +15,14 @@ The system is split into a relentless extraction backend and a highly polished r
 * **Dynamic Aesthetics**: Emerald glassmorphism with true refractive physics. Includes frosted/clear state toggles and pointer-reactive panel edge lighting.
 * **Export**: Clean JSON or CSV data dumps.
 
+## How to Target the Engine
+Viridian Recon supports two distinct methods for initiating an extraction sequence from the UI Command Center or via API:
+
+1. **Keyword Targeting (General Search)**: 
+   If you input a simple keyword (e.g., `nike` or `fitness`), the system automatically encodes and formats the input into a global Meta Ads search URL (searching all active ads worldwide matching that term). This is excellent for broad market recon but may yield ghost-nodes if unauthenticated.
+2. **Exact URL Targeting (Surgical Strike)**: 
+   If you paste a complete, exact Meta Ads Library URL (e.g., `https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=ALL&view_all_page_id=15087023444`), the engine will bypass the keyword auto-formatter and navigate directly to that specific competitor's payload. This guarantees hyper-specific page results.
+
 ## Setup Instructions
 
 ### Option A: Docker (Recommended)
@@ -121,4 +129,4 @@ docker-compose exec backend python diagnostic.py
 ---
 
 ## License
-This project is licensed under the **MIT License**. See the [LICENSE](./LICENSE) file for the full text.
+This project is licensed under a **Proprietary Evaluation License**. See the [LICENSE](./LICENSE) file for the full text. It is provided strictly for internal technical evaluation and recruitment review.

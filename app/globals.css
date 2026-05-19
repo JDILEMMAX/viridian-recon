@@ -5,4 +5,34 @@
   body {
     @apply antialiased min-h-screen selection:bg-emerald-500/30 selection:text-emerald-200;
   }
+
+  /* Firefox Standard Scrollbar */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(16, 185, 129, 0.4) transparent;
+  }
+
+  /* WebKit (Chrome/Edge/Safari) Scrollbar */
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: rgba(16, 185, 129, 0.4);
+    border-radius: 9999px;
+    transition: background-color 0.3s;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(16, 185, 129, 0.7);
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
 }
