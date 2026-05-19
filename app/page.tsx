@@ -41,6 +41,65 @@ const GlassPanel = ({ children, className, innerClassName = "flex-col", isDark, 
   );
 };
 
+// ARCHITECTURAL NOTE: Custom Animated EKG Component
+// Engineered to pulse 3 times on initial load, pulse continuously during active runs, 
+// and gracefully settle into a solid state upon sequence completion.
+const EKGHeartbeat = ({ isRunActive, isDark }: { isRunActive: boolean, isDark: boolean }) => {
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
+  const glowColor = isRunActive ? 'rgba(239,68,68,0.8)' : 'rgba(16,185,129,0.8)';
+
+  // Disable the initial slow pulse load animation once a run has started
+  useEffect(() => {
+    if (isRunActive) setIsInitialLoad(false);
+  }, [isRunActive]);
+
+  return (
+    <motion.svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="w-5 h-5 flex-shrink-0"
+    >
+      <motion.path
+        d="M3 12h3l3 -9 5 18 3 -9h4"
+        initial={{ pathLength: 0, opacity: 0 }}
+        animate={
+          isRunActive
+            ? {
+              pathLength: [0, 1, 0],
+              pathOffset: [1, 0, 1],
+              opacity: [0, 1, 0],
+              filter: [`drop-shadow(0 0 0px transparent)`, `drop-shadow(0 0 8px ${glowColor})`, `drop-shadow(0 0 0px transparent)`]
+            }
+            : isInitialLoad
+              ? {
+                pathLength: [0, 1, 0, 0, 1, 0, 0, 1, 0, 1],
+                opacity: [0, 1, 0, 0, 1, 0, 0, 1, 0, 1],
+                filter: `drop-shadow(0 0 0px transparent)`
+              }
+              : {
+                // Post-run resting state (solid icon, no animation)
+                pathLength: 1,
+                opacity: 1,
+                filter: `drop-shadow(0 0 0px transparent)`
+              }
+        }
+        transition={
+          isRunActive
+            ? { repeat: Infinity, duration: 1.2, ease: "easeInOut" } // Aggressive, continuous run pulse
+            : isInitialLoad
+              ? { duration: 7, ease: "easeInOut" } // Slower initial 3-cycle load
+              : { duration: 0.5 } // Smooth transition to rest
+        }
+      />
+    </motion.svg>
+  );
+};
+
 export default function CommandCenter() {
   const [isDark, setIsDark] = useState(true);
   const [isFrosted, setIsFrosted] = useState(true);
@@ -49,6 +108,21 @@ export default function CommandCenter() {
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [fullScreenAnalytics, setFullScreenAnalytics] = useState(false);
   const [isFabAnimating, setIsFabAnimating] = useState(true);
+  const [mockIntervalId, setMockIntervalId] = useState<NodeJS.Timeout | null>(null);
+
+  // New state to track if we are waiting for the backend to safely tear down
+  const [isHalting, setIsHalting] = useState(false);
+
+  // Derive active status across all intermediate states, including teardown phases
+  const inactiveStates = ['idle', 'standby', 'complete', 'error', 'sequence aborted', 'warning: zero ads intercepted', 'engine failure'];
+  const isRunActive = !inactiveStates.includes(telemetry.status);
+
+  // Clear halting state safely when backend confirms termination
+  useEffect(() => {
+    if (!isRunActive) {
+      setIsHalting(false);
+    }
+  }, [isRunActive]);
 
   useEffect(() => {
     const timer = setTimeout(() => setIsFabAnimating(false), 2500);
@@ -99,6 +173,9 @@ export default function CommandCenter() {
 
   const handleExtract = async () => {
     if (!target) return;
+    // Optimistic UI Update: Instantly flip the UI to 'active' before the network responds
+    setTelemetry(p => ({ ...p, status: 'booting environment' }));
+
     try {
       await fetch('http://localhost:8000/api/extract', {
         method: 'POST',
@@ -106,9 +183,8 @@ export default function CommandCenter() {
         body: JSON.stringify({ target })
       });
     } catch (e) {
-      console.warn("Backend not reachable gracefully. Engaging mock mode for preview.");
+      console.warn("Backend not reachable. Engaging mock mode.");
       let i = 0;
-      setTelemetry((p) => ({ ...p, status: 'booting UI environment' }));
       const interval = setInterval(() => {
         if (i > 15) {
           clearInterval(interval);
@@ -120,7 +196,27 @@ export default function CommandCenter() {
         setTelemetry({ rps: parseFloat((Math.random() * 2).toFixed(1)), adsExtracted: i * 24, health: 'stable', status: 'extracting' });
         i++;
       }, 1000);
+      setMockIntervalId(interval);
     }
+  };
+
+  const handleStop = async () => {
+    if (isHalting) return; // Prevent spam clicking
+    setIsHalting(true);
+
+    try {
+      await fetch('http://localhost:8000/api/stop', { method: 'POST' });
+    } catch (e) {
+      console.warn("Backend stop endpoint unreachable.");
+    }
+
+    if (mockIntervalId) {
+      clearInterval(mockIntervalId);
+      setMockIntervalId(null);
+      setTelemetry(prev => ({ ...prev, status: 'sequence aborted', health: 'standby' }));
+    }
+    // Note: We deliberately do NOT optimistically set status to 'idle' here.
+    // We let the WebSocket update the state to confirm the backend has successfully halted.
   };
 
   const handleExport = async () => {
@@ -213,17 +309,51 @@ export default function CommandCenter() {
               </div>
             </div>
 
-            <button
-              onClick={handleExtract}
-              disabled={telemetry.status === 'extracting' || !target}
-              className={`w-full mt-auto mt-6 font-bold py-3 px-4 rounded-xl transition-all flex justify-center items-center gap-2 ${isDark
-                  ? 'bg-emerald-500 hover:bg-emerald-400 text-black shadow-[0_0_20px_rgba(16,185,129,0.2)] hover:shadow-[0_0_30px_rgba(16,185,129,0.4)] disabled:opacity-50 disabled:hover:bg-emerald-500 disabled:shadow-none'
-                  : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-[0_0_15px_rgba(5,150,105,0.3)] hover:shadow-[0_0_25px_rgba(5,150,105,0.4)] disabled:opacity-50 disabled:hover:bg-emerald-600 disabled:shadow-none'
-                }`}
+            <motion.button
+              onClick={isRunActive ? handleStop : handleExtract}
+              disabled={(!target && !isRunActive) || isHalting}
+              initial={{ color: isDark ? '#000000' : '#ffffff' }}
+              animate={{
+                backgroundColor: isRunActive
+                  ? (isDark ? 'rgba(220,38,38,0.1)' : 'rgba(239,68,68,0.9)')
+                  : (isDark ? 'rgba(16,185,129,1)' : 'rgba(5,150,105,1)'),
+                color: isRunActive
+                  ? (isDark ? '#ef4444' : '#ffffff')
+                  : (isDark ? '#000000' : '#ffffff'),
+                borderColor: isRunActive ? 'rgba(239,68,68,0.4)' : 'transparent',
+                boxShadow: isRunActive
+                  ? (isDark ? '0 0 25px rgba(239,68,68,0.2)' : '0 0 25px rgba(239,68,68,0.5)')
+                  : (isDark ? '0 0 20px rgba(16,185,129,0.2)' : '0 0 15px rgba(5,150,105,0.3)')
+              }}
+              // FIX: Enforced strict h-14 to prevent vertical collapse during text transitions
+              className="w-full mt-auto mt-6 h-14 font-bold rounded-xl border transition-all overflow-hidden relative z-10 disabled:opacity-50"
             >
-              <Activity className={`w-5 h-5 ${telemetry.status === 'extracting' ? 'animate-spin' : ''}`} />
-              {telemetry.status === 'extracting' ? 'Interception Active...' : 'Initiate Sequence'}
-            </button>
+              {/* FIX: Parent container strictly centers text so absolute popLayout won't misalign */}
+              <div className="relative w-full h-full flex items-center justify-center pointer-events-none z-10">
+                <AnimatePresence mode="popLayout">
+                  <motion.div
+                    key={isHalting ? 'halting' : isRunActive ? 'stop' : 'start'}
+                    initial={{ y: 20, opacity: 0, filter: 'blur(4px)' }}
+                    animate={{ y: 0, opacity: 1, filter: 'blur(0px)' }}
+                    exit={{ y: -20, opacity: 0, filter: 'blur(4px)', position: 'absolute' }}
+                    transition={{ type: "spring", stiffness: 300, damping: 25 }}
+                    className="flex items-center justify-center gap-2"
+                  >
+                    <EKGHeartbeat isRunActive={isRunActive || isHalting} isDark={isDark} />
+                    {isHalting ? 'Halting...' : isRunActive ? 'Stop Sequence' : 'Initiate Sequence'}
+                  </motion.div>
+                </AnimatePresence>
+              </div>
+
+              {/* Fluid Glass Sweep Effect */}
+              {!isRunActive && (
+                <motion.div
+                  animate={{ x: ['-100%', '200%'] }}
+                  transition={{ repeat: Infinity, duration: 2.5, ease: "linear", delay: 1 }}
+                  className="absolute inset-0 w-1/2 bg-gradient-to-r from-transparent via-white/20 to-transparent skew-x-12 pointer-events-none"
+                />
+              )}
+            </motion.button>
           </GlassPanel>
         </motion.div>
 
@@ -232,10 +362,13 @@ export default function CommandCenter() {
             <div className="flex justify-between items-center mb-8">
               <h2 className="font-semibold text-lg">Live Telemetry</h2>
               <div className="flex items-center gap-3 bg-black/10 dark:bg-black/30 px-3 py-1.5 rounded-full border border-black/5 dark:border-white/5 max-w-[60%] md:max-w-[70%] overflow-hidden">
+
+                {/* REVERTED TO PREVIOUS WORKING VERSION */}
                 <span className="relative flex h-2.5 w-2.5 flex-shrink-0">
-                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${telemetry.status === 'extracting' ? 'bg-emerald-400' : (isDark ? 'bg-gray-400' : 'bg-emerald-600')} opacity-75`}></span>
-                  <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${telemetry.status === 'extracting' ? 'bg-emerald-500' : (isDark ? 'bg-gray-500' : 'bg-emerald-700')}`}></span>
+                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${isRunActive ? 'bg-emerald-400' : (isDark ? 'bg-gray-400' : 'bg-emerald-600')} opacity-75`}></span>
+                  <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${isRunActive ? 'bg-emerald-500' : (isDark ? 'bg-gray-500' : 'bg-emerald-700')}`}></span>
                 </span>
+
                 <span className="text-[10px] sm:text-xs uppercase tracking-widest opacity-80 font-semibold truncate">{telemetry.status}</span>
               </div>
             </div>
@@ -292,7 +425,7 @@ export default function CommandCenter() {
                 </motion.p>
               )}
 
-              {telemetry.status === 'extracting' && Array.from({ length: Math.min(Math.floor(telemetry.adsExtracted / 4), 6) }).map((_, i) => {
+              {isRunActive && Array.from({ length: Math.min(Math.floor(telemetry.adsExtracted / 4), 6) }).map((_, i) => {
                 const blockId = (telemetry.adsExtracted - i).toString().padStart(6, '0');
                 return (
                   <motion.p initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.1 }} key={i} className="animate-pulse mt-1 opacity-80 break-all">
@@ -313,8 +446,8 @@ export default function CommandCenter() {
                 onClick={handleExport}
                 disabled={telemetry.status !== 'complete'}
                 className={`px-5 py-2.5 rounded-xl font-medium flex items-center gap-2 border transition-all ${isDark
-                    ? 'bg-white/5 border-white/10 hover:bg-white/10 disabled:opacity-20 disabled:hover:bg-white/5'
-                    : 'bg-black/5 border-black/10 hover:bg-black/10 disabled:opacity-20 disabled:hover:bg-black/5'
+                  ? 'bg-white/5 border-white/10 hover:bg-white/10 disabled:opacity-20 disabled:hover:bg-white/5'
+                  : 'bg-black/5 border-black/10 hover:bg-black/10 disabled:opacity-20 disabled:hover:bg-black/5'
                   }`}
               >
                 <Download className="w-4 h-4" /> Export Payload
@@ -334,21 +467,21 @@ export default function CommandCenter() {
         className={`fixed bottom-6 right-6 lg:bottom-8 lg:right-8 flex items-center gap-3 px-4 py-3 rounded-full border shadow-[0_0_25px_rgba(16,185,129,0.25)] z-40 transition-colors ${fabBg}`}
       >
         <div className="flex items-end justify-center gap-[3px] h-5 w-5">
-            <motion.div 
-              animate={isFabAnimating ? { height: ['4px', '20px', '8px', '16px', '4px'] } : { height: '10px' }}
-              transition={{ repeat: isFabAnimating ? Infinity : 0, duration: 0.6, ease: "linear" }}
-              className={`w-1.5 rounded-sm ${isDark ? 'bg-emerald-400' : 'bg-emerald-600'}`}
-            />
-            <motion.div 
-              animate={isFabAnimating ? { height: ['16px', '4px', '20px', '8px', '16px'] } : { height: '16px' }}
-              transition={{ repeat: isFabAnimating ? Infinity : 0, duration: 0.6, ease: "linear" }}
-              className={`w-1.5 rounded-sm ${isDark ? 'bg-emerald-400' : 'bg-emerald-600'}`}
-            />
-            <motion.div 
-              animate={isFabAnimating ? { height: ['8px', '16px', '4px', '20px', '8px'] } : { height: '8px' }}
-              transition={{ repeat: isFabAnimating ? Infinity : 0, duration: 0.6, ease: "linear" }}
-              className={`w-1.5 rounded-sm ${isDark ? 'bg-emerald-400' : 'bg-emerald-600'}`}
-            />
+          <motion.div
+            animate={isFabAnimating ? { height: ['4px', '20px', '8px', '16px', '4px'] } : { height: '10px' }}
+            transition={{ repeat: isFabAnimating ? Infinity : 0, duration: 0.6, ease: "linear" }}
+            className={`w-1.5 rounded-sm ${isDark ? 'bg-emerald-400' : 'bg-emerald-600'}`}
+          />
+          <motion.div
+            animate={isFabAnimating ? { height: ['16px', '4px', '20px', '8px', '16px'] } : { height: '16px' }}
+            transition={{ repeat: isFabAnimating ? Infinity : 0, duration: 0.6, ease: "linear" }}
+            className={`w-1.5 rounded-sm ${isDark ? 'bg-emerald-400' : 'bg-emerald-600'}`}
+          />
+          <motion.div
+            animate={isFabAnimating ? { height: ['8px', '16px', '4px', '20px', '8px'] } : { height: '8px' }}
+            transition={{ repeat: isFabAnimating ? Infinity : 0, duration: 0.6, ease: "linear" }}
+            className={`w-1.5 rounded-sm ${isDark ? 'bg-emerald-400' : 'bg-emerald-600'}`}
+          />
         </div>
         <span className={`text-xs font-bold uppercase tracking-widest hidden md:block ${isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>Deep Analytics</span>
       </motion.button>

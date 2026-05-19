@@ -25,12 +25,18 @@ class TelemetryManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
         self.main_loop = None
+        # ARCHITECTURAL NOTE: Telemetry Caching
+        # We cache the state so refreshes instantly sync the UI without 
+        # waiting for the next scraper loop iteration.
+        self.last_state = {"status": "idle", "health": "standby", "rps": 0.0, "adsExtracted": 0}
 
     async def connect(self, websocket: WebSocket):
         if self.main_loop is None:
             self.main_loop = asyncio.get_running_loop()
         await websocket.accept()
         self.active_connections.append(websocket)
+        # Instantly sync state to newly connected client
+        await websocket.send_text(json.dumps(self.last_state))
 
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
@@ -48,6 +54,7 @@ class TelemetryManager:
             await self._broadcast_internal(message)
 
     async def _broadcast_internal(self, message: dict):
+        self.last_state.update(message)
         for connection in list(self.active_connections):
             try:
                 await connection.send_text(json.dumps(message))
@@ -74,22 +81,27 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         telemetry.disconnect(websocket)
 
-# Global dictionary to store the extracted data for a single run
+# Global data and engine reference
 current_extraction_data = []
+active_engine = None # FIX: Initialized globally to prevent NameError
 
 import threading
 
 def run_extraction_in_thread(target):
+    global active_engine
     # This will use the ProactorEventLoop policy set at the top of the file
     new_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(new_loop)
+    
     engine = ScraperEngine(telemetry=telemetry)
+    active_engine = engine # Map the instance to the global reference
     
     # Give the engine a reference to dump data into
     engine.output_data_ref = current_extraction_data
     try:
         new_loop.run_until_complete(engine.run_extraction(target))
     finally:
+        active_engine = None # Clear reference upon completion
         new_loop.close()
 
 @app.post("/api/extract")
@@ -97,6 +109,9 @@ async def extract_data(payload: dict):
     global current_extraction_data
     # Reset on new extraction
     current_extraction_data.clear()
+    
+    # Reset telemetry cache for the new run
+    telemetry.last_state.update({"rps": 0.0, "adsExtracted": 0})
 
     # Retrieve target config
     target = payload.get("target", "")
@@ -108,6 +123,14 @@ async def extract_data(payload: dict):
     thread.start()
     
     return {"status": "Extraction sequence initiated"}
+
+@app.post("/api/stop")
+async def stop_extraction():
+    global active_engine
+    if active_engine:
+        active_engine.is_running = False # Flip the kill switch
+        return {"status": "Stop command issued"}
+    return {"status": "No active engine found"}
 
 @app.get("/api/export")
 async def export_data():

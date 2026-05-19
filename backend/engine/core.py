@@ -29,6 +29,7 @@ class ScraperEngine:
         and performs randomized mouse jitter. The trade-off is slower raw extraction speed,
         but it exponentially increases session survival duration against advanced telemetry.
         """
+        # HARD KILL CHECK: Do not perform behaviors if the engine has been stopped
         if not self.is_running:
             return
 
@@ -38,7 +39,10 @@ class ScraperEngine:
             await page.mouse.wheel(delta_x=0, delta_y=scroll_amount)
             
             # 2. Micro-hesitation (mimic cognitive processing)
-            await asyncio.sleep(random.uniform(0.5, 2.5))
+            # We check is_running before and after the sleep to ensure responsiveness
+            if not self.is_running: return
+            await asyncio.sleep(random.uniform(0.5, 2.0))
+            if not self.is_running: return
             
             # 3. Mouse jitter (mimic trackpad adjustments)
             x_pos = random.randint(100, 800)
@@ -59,6 +63,9 @@ class ScraperEngine:
         Meta nests ad node data deeply. This function acts as a flattener, extracting
         only the critical schematics (ID, copy, dates, media).
         """
+        if not self.is_running:
+            return
+
         try:
             if "graphql" not in response.url.lower():
                 return
@@ -135,7 +142,7 @@ class ScraperEngine:
                         self.extracted_data.append(ad_record)
                         new_ads += 1
 
-            if new_ads > 0:
+            if new_ads > 0 and self.is_running:
                 self.total_ads_parsed += new_ads
                 if self.telemetry:
                      # Calculate rough RPS based on arbitrary time window for UI
@@ -158,13 +165,14 @@ class ScraperEngine:
          scrolling/parsing until limit reached.
          """
          self.is_running = True
+         halted_manually = False
+
          if self.telemetry:
             await self.telemetry.broadcast({"status": "booting stealth browser", "health": "excellent"})
 
          try:
             async with async_playwright() as p:
-                # 1. Configure stealth browser. Headless=True for production, 
-                # but False is sometimes needed if Meta flags headless browsers entirely.
+                # 1. Configure stealth browser
                 browser = await p.chromium.launch(
                     headless=True,
                     args=['--disable-blink-features=AutomationControlled']
@@ -181,8 +189,7 @@ class ScraperEngine:
                 # 2. Wire up the interceptor
                 page.on("response", self._handle_graphql_response)
                 
-                # 3. Construct target URL. Meta Ads Library requires specific query params.
-                # If target is already a full URL, use it, otherwise assume it's a keyword.
+                # 3. Construct target URL
                 if target.startswith("http"):
                     target_url = target
                 else:
@@ -193,69 +200,63 @@ class ScraperEngine:
                     await self.telemetry.broadcast({"status": f"navigating: {target}", "health": "excellent"})
 
                 # 4. Navigate
-                try:
-                     await page.goto(target_url, wait_until="networkidle", timeout=60000)
-                except Exception as e:
-                     logger.warning(f"Initial navigation timeout/error, continuing anyway: {e}")
-                     if self.telemetry:
-                        await self.telemetry.broadcast({"status": "network hesitant. applying retries.", "health": "warning"})
+                await page.goto(target_url, wait_until="networkidle", timeout=60000)
 
                 # 4b. Cookie and Overlay Bypassing
-                if self.telemetry:
+                if self.is_running and self.telemetry:
                     await self.telemetry.broadcast({"status": "bypassing overlays...", "health": "stable"})
                 
+                # Quick bypass logic
                 try:
-                    # Attempt to dismiss cookie banners
-                    cookie_buttons = ["Allow all cookies", "Accept All", "Allow Essential and Optional Cookies", "Only allow essential cookies"]
+                    cookie_buttons = ["Allow all cookies", "Accept All", "Only allow essential cookies"]
                     for btn_text in cookie_buttons:
-                        try:
-                            btn = page.get_by_role("button", name=btn_text)
-                            if await btn.count() > 0:
-                                await btn.first.click(timeout=2000)
-                                await page.wait_for_timeout(1000)
-                                break
-                        except Exception:
-                            pass
-                    
-                    # Attempt to dismiss generic login/signup overlays
-                    close_buttons = page.locator('[aria-label="Close"]')
-                    if await close_buttons.count() > 0:
-                        await close_buttons.first.click(timeout=2000)
-                        await page.wait_for_timeout(1000)
-                        
-                    # Click body to dismiss non-modal overlays
+                        if not self.is_running: break
+                        btn = page.get_by_role("button", name=btn_text)
+                        if await btn.count() > 0:
+                            await btn.first.click(timeout=2000)
+                            break
                     await page.mouse.click(10, 10)
-                except Exception as e:
-                    logger.debug(f"Overlay bypass encountered error: {e}")
+                except: pass
 
                 # 5. Core Infinite Scroll Loop
-                # We loop for a set number of iterations or until no new ads are found.
                 max_scrolls = 20
                 for i in range(max_scrolls):
+                    # CRITICAL: Immediate check for Stop Command
+                    if not self.is_running:
+                        logger.info("Stop Command Detected. Halting Scroll Loop.")
+                        halted_manually = True
+                        break
+
                     if self.telemetry:
                         await self.telemetry.broadcast({"status": f"scrolling tier {i+1}/{max_scrolls}", "health": "stable"})
                     
-                    # Inject human behavior logic between scroll requests
+                    # Behavior Simulation
                     await self._human_behavior_controller(page)
                     
-                    # Force a large page-down scroll to trigger pagination requests
+                    # DOM Scroll
                     await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                     
-                    # Wait for network to settle slightly
+                    # Randomized wait that respects the kill switch
+                    wait_time = random.randint(1500, 3000)
                     try:
-                        await page.wait_for_timeout(random.randint(1500, 3000))
+                        # We use asyncio.wait_for to make the sleep interruptible if needed, 
+                        # but checking the flag after a short timeout is safer for this architecture.
+                        await page.wait_for_timeout(wait_time)
                     except:
                         pass
                 
-                # 6. Tear down
+                # 6. Final Sync
+                if self.output_data_ref is not None:
+                     self.output_data_ref.extend(self.extracted_data)
+
+                # 7. Tear down - BROADCAST THE CORRECT TERMINATION STATUS
                 if self.telemetry:
-                    if len(self.extracted_data) == 0:
+                    if halted_manually or not self.is_running:
+                        await self.telemetry.broadcast({"status": "sequence aborted", "health": "standby"})
+                    elif len(self.extracted_data) == 0:
                         await self.telemetry.broadcast({"status": "warning: zero ads intercepted", "health": "warning"})
                     else:
                         await self.telemetry.broadcast({"status": "complete", "health": "excellent"})
-
-                if self.output_data_ref is not None:
-                     self.output_data_ref.extend(self.extracted_data)
 
                 self.is_running = False
                 await browser.close()
@@ -264,4 +265,5 @@ class ScraperEngine:
             logger.error(f"Critical engine failure: {e}")
             if self.telemetry:
                 await self.telemetry.broadcast({"status": "engine failure", "health": "critical"})
+         finally:
             self.is_running = False

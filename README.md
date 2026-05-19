@@ -4,9 +4,75 @@ Viridian Recon is a high-performance Meta Ads Library extraction engine. It is e
 
 ## Architecture
 The system is split into a relentless extraction backend and a highly polished reactive frontend.
+
 * **Frontend**: Next.js, Tailwind CSS and Framer Motion. 
 * **Backend**: FastAPI, WebSockets and Playwright.
 * **Infrastructure**: Completely containerized via Docker.
+
+### System Flow & Extraction Architecture
+
+```mermaid
+flowchart LR
+    User(((Power User)))
+
+    subgraph Frontend [Next.js Command Center]
+        UI([Glassmorphism UI])
+        Dash([Live Telemetry])
+        Analytics([Deep Analytics])
+    end
+
+    subgraph Backend [FastAPI Server]
+        API[[REST Endpoints]]
+        WS[[WebSocket Manager]]
+        Daemon[(Daemon Thread)]
+    end
+
+    subgraph Engine [Extraction Engine]
+        PW([Playwright Stealth])
+        HBC>Behavior Controller]
+        Intercept{{GraphQL Intercept}}
+        Parser{{Fuzzy Flattener}}
+    end
+
+    subgraph Target [Meta Fortress]
+        Meta[(Meta Ads Library)]
+    end
+
+    %% Flow execution
+    User -- "Target Node" --> UI
+    User -. "cURL" .-> API
+
+    UI -- "POST /api/extract" --> API
+    API -- "Decoupled Async" --> Daemon
+    Daemon -- "Boot Context" --> PW
+
+    PW == "Bypass Defenses" ==> Meta
+    HBC -. "Scroll & Jitter" .-> Meta
+    
+    Meta == "Raw JSON" ==> Intercept
+    Intercept -- "Filter Dumps" --> Parser
+    
+    Parser -- "Clean Schema" --> API
+    Parser -- "Yield Counters" --> WS
+
+    WS == "60fps WSS" ==> Dash
+    Dash -. "Historical Peak" .-> Analytics
+
+    %% Theme & Aesthetics
+    classDef default fill:#09090b,stroke:#10b981,stroke-width:1px,color:#d1fae5;
+    classDef highlight fill:#059669,stroke:#34d399,stroke-width:2px,color:#fff;
+    classDef target fill:#4c0519,stroke:#f43f5e,stroke-width:2px,color:#fff;
+    classDef userNode fill:#064e3b,stroke:#6ee7b7,stroke-width:2px,color:#fff;
+
+    class User userNode;
+    class Dash,Daemon,Intercept,Parser highlight;
+    class Meta target;
+
+    style Frontend fill:transparent,stroke:#059669,stroke-width:2px,stroke-dasharray: 5 5,color:#34d399
+    style Backend fill:transparent,stroke:#059669,stroke-width:2px,stroke-dasharray: 5 5,color:#34d399
+    style Engine fill:transparent,stroke:#059669,stroke-width:2px,stroke-dasharray: 5 5,color:#34d399
+    style Target fill:transparent,stroke:#e11d48,stroke-width:2px,stroke-dasharray: 5 5,color:#fb7185
+```
 
 ## Core Capabilities
 * **Targeted Extraction**: Search by keyword, page URL or slug.
